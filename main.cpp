@@ -1,18 +1,27 @@
+#define USE_LINUX_SHOWMETHEKEY_CLI  0
+#define USE_SFML_KEY_EVENT          0
+#define USE_SFML_KEYPRESSED         1
+
 #include <iostream>
 #include <vector>
 #include <fstream>
 #include <chrono>
-#ifdef __linux__
+
+#if defined(__linux__)
+
+#if USE_LINUX_SHOWMETHEKEY_CLI
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <gio/gio.h>
 #include <pthread.h>
 #endif
+#endif
+
+#include <yaml-cpp/yaml.h>
+#include "magic_enum/magic_enum.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
-
-#include <yaml-cpp/yaml.h>
-#include <nlohmann/json.hpp>
-
-#include "magic_enum/magic_enum.hpp"
 
 #if 1 || REGION_CONFIGURATION
 
@@ -59,8 +68,6 @@ struct KeyConfig
 {
     float width_multiplier;
     static constexpr float width_multiplier_default = 1.0F;
-
-    float width_multiplier_scaled;
     
     sf::Keyboard::Scancode scancode;
     static const sf::Keyboard::Scancode scancode_default = sf::Keyboard::Scancode::A;
@@ -70,11 +77,6 @@ struct KeyConfig
 
     KeyConfig(const float width_multiplier, const sf::Keyboard::Scancode scancode, const sf::String &key_name, const sf::Color color)
         : width_multiplier(width_multiplier), scancode(scancode), key_name(key_name), color(color) { }
-
-    void ScaleWidthBy(const float scale)
-    {
-        width_multiplier_scaled = width_multiplier * scale;
-    }
 };
 static const sf::String config_key_key_name_default = L"A";
 
@@ -288,7 +290,6 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
             );
 
             KeyConfig key_config = KeyConfig(width_multiplier, scancode, key_name, color);
-            key_config.ScaleWidthBy(config.scale_final);
             config.key_configs.push_back(key_config);
 
             key_count++;
@@ -325,7 +326,6 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
 
             // copy default key config
             KeyConfig key_config_default_copy = KeyConfig(default_key_config);
-            key_config_default_copy.ScaleWidthBy(config.scale_final);
             config.key_configs.push_back(key_config_default_copy);
         }
     }
@@ -580,7 +580,7 @@ public:
 
     void Update(const float delta_time)
     {
-#if defined(_WIN32) || 1
+#if defined(_WIN32) || USE_SFML_KEYPRESSED
         bool key_down_curr = sf::Keyboard::isKeyPressed(scancode);        
 
         if (!key_down_prev && key_down_curr)
@@ -588,11 +588,11 @@ public:
 
         if (key_down_prev && !key_down_curr)
             Release();
+
+        key_down_prev = key_down_curr;
 #endif
 
         UpdateBars(delta_time);
-
-        key_down_prev = key_down_curr;
     }
 
     void Draw(sf::RenderTarget &target)
@@ -631,28 +631,120 @@ public:
 
 #endif
 
-#if defined(__linux__) && 0
+#if defined(__linux__) && USE_LINUX_SHOWMETHEKEY_CLI
 
-struct KeyStateChange
+static std::map<sf::Keyboard::Scancode, bool> key_state_change_smtk;
+static pthread_mutex_t key_state_change_smtk_mutex;
+static bool smtk_poll_thread_exit_req = false;
+static bool smtk_poll_thread_exit_flag = false;
+
+struct ShowMeTheKeyProcess
 {
-    sf::Keyboard::Scancode scancode;
-    bool pressed;
-
-    KeyStateChange(sf::Keyboard::Scancode scancode, bool pressed)
-        : scancode(scancode), pressed(pressed) { }
+    GSubprocess *process = nullptr;
+    GDataInputStream *cli_output = nullptr;
 };
 
-static void *ThreadShowMeTheKey(void *threadid)
+static void *ThreadPollKeyInput(void *arg)
 {
+    ShowMeTheKeyProcess *showmethekey_process = (ShowMeTheKeyProcess *)arg;
 
+    if (showmethekey_process->cli_output != nullptr)
+    {
+        while (true)
+        {
+            g_autoptr(GError) error = nullptr;
+            g_autofree char *line = g_data_input_stream_read_line(
+                showmethekey_process->cli_output, nullptr, nullptr, &error
+            );
 
-    pthread_exit(NULL);
+            if (line != nullptr)
+            {
+                try
+                {
+                    nlohmann::json json = nlohmann::json::parse(line);
+
+                    int json_key_code = json["key_code"].get<int>();
+                    std::string json_key_name = json["key_name"].get<std::string>();
+                    std::string json_state_name = json["state_name"].get<std::string>();
+
+                    // std::cout << "key_code: " << json_key_code << "; key_name: " << json_key_name << "; state_name: " << json_state_name << ";\n";
+
+                    pthread_mutex_lock(&key_state_change_smtk_mutex);
+
+                    // TODO: mapping key code to sfml's
+                    key_state_change_smtk.insert_or_assign
+                    (
+                        magic_enum::enum_cast<sf::Keyboard::Scancode>(json_key_name).value_or(sf::Keyboard::Scancode::Unknown),
+                        json_state_name == "PRESSED" ? true : false
+                    );
+
+                    pthread_mutex_unlock(&key_state_change_smtk_mutex);
+                }
+                catch (const std::exception &exception)
+                {
+                    std::cerr << "Failed to parse json string: " << exception.what() << '\n';
+                }
+            }
+            else if (error != nullptr)
+                g_warning("Error while reading line: %s.", error->message);
+        }
+
+    }
+
+    pthread_exit(nullptr);
+    return nullptr;
+}
+
+static bool StartShowMeTheKeyCLI(ShowMeTheKeyProcess &showmethekey_process)
+{
+    GSubprocessFlags showmethekey_process_flags
+    (
+        GSubprocessFlags(
+            G_SUBPROCESS_FLAGS_STDIN_PIPE  |
+            G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+            G_SUBPROCESS_FLAGS_STDERR_PIPE
+        )
+    );
+
+    g_autoptr(GError) error = nullptr;
+
+    showmethekey_process.process = g_subprocess_new
+    (
+        showmethekey_process_flags,
+        &error,
+        "pkexec", "showmethekey-cli", nullptr
+    );
+
+    if (showmethekey_process.process == nullptr)
+    {
+        std::cerr << "Failed to run showmethekey-cli as subprocess: " << error->message << '\n';
+        return false;
+    }
+
+    showmethekey_process.cli_output = g_data_input_stream_new(
+		g_subprocess_get_stdout_pipe(showmethekey_process.process)
+	);
+
+    return true;
 }
 
 #endif
 
 int main(int arg_count, char *arg_list[])
 {
+#if defined(__linux__) && USE_LINUX_SHOWMETHEKEY_CLI
+
+    // showmethekey-cli
+    ShowMeTheKeyProcess showmethekey_process;
+    
+    StartShowMeTheKeyCLI(showmethekey_process);
+
+    pthread_t smtk_polling_process;
+    pthread_mutex_init(&key_state_change_smtk_mutex, nullptr);
+    pthread_create(&smtk_polling_process, nullptr, ThreadPollKeyInput, (void *)&showmethekey_process);
+
+#endif
+
     // config
     Config config;
 
@@ -678,7 +770,7 @@ int main(int arg_count, char *arg_list[])
         keys.push_back(
             KeyWithBar(
                 { window_width_final, key_pos_y },
-                config.key_size_scaled, key_config.width_multiplier_scaled,
+                config.key_size_scaled, key_config.width_multiplier,
                 config.key_border_thickness_scaled,
                 config.bar_velocity_scaled,
                 key_config.scancode,
@@ -689,14 +781,15 @@ int main(int arg_count, char *arg_list[])
             )
         );
 
-        float key_width = config.key_size_scaled * key_config.width_multiplier_scaled;
+        float key_width = config.key_size_scaled * key_config.width_multiplier;
 
         window_width_final += key_width + config.key_spacing_scaled;
     }
     window_width_final += config.margin_right_scaled - config.key_spacing_scaled;
 
     // sfml window creation
-    sf::RenderWindow window(
+    sf::RenderWindow window
+    (
         sf::VideoMode({ (unsigned int)window_width_final, (unsigned int)config.window_height_scaled }),
         window_title,
         sf::Style::Titlebar | sf::Style::Close
@@ -719,8 +812,16 @@ int main(int arg_count, char *arg_list[])
 
         key_state_changes.clear();
 
-#if defined(__linux__)
-        // key input from showmethekey-cli
+#if defined(__linux__) && USE_LINUX_SHOWMETHEKEY_CLI
+
+        pthread_mutex_lock(&key_state_change_smtk_mutex);
+
+        for (const auto& [scancode, pressed] : key_state_change_smtk)
+            key_state_changes.insert_or_assign(scancode, pressed);
+
+        key_state_change_smtk.clear();
+
+        pthread_mutex_unlock(&key_state_change_smtk_mutex);
 
 #endif
 
@@ -729,7 +830,7 @@ int main(int arg_count, char *arg_list[])
             if (event->is<sf::Event::Closed>())
                 window.close();
 
-#if 0
+#if USE_SFML_KEY_EVENT
             // key input from sfml events
             if (const auto *key_pressed_event = event->getIf<sf::Event::KeyPressed>())
                 key_state_changes.insert_or_assign(key_pressed_event->scancode, true);
@@ -764,6 +865,23 @@ int main(int arg_count, char *arg_list[])
 
         time_last = time_curr;
     }
+    
+#if defined(__linux__) && USE_LINUX_SHOWMETHEKEY_CLI
+
+    pthread_cancel(smtk_polling_process);
+    
+    if (showmethekey_process.process != nullptr)
+    {
+        const char cmd_stop[] = "stop\n";
+		g_subprocess_communicate
+        (
+			showmethekey_process.process, g_bytes_new(cmd_stop, sizeof(cmd_stop)), NULL, NULL, NULL, NULL
+		);
+    }
+
+    pthread_mutex_destroy(&key_state_change_smtk_mutex);
+
+#endif
 
     return 0;
 }
