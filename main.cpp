@@ -32,9 +32,6 @@ static const std::string default_config_file_name = "config.yaml";
 // config key names
 static const std::string config_font_name_key = "Font";
 
-static const std::string config_key_char_size_key = "KeyCharacterSize";
-static const std::string config_counter_char_size_key = "CounterCharacterSize";
-
 static const std::string config_framerate_limit_key = "FramerateLimit";
 
 static const std::string config_dpi_scale_enabled_key = "DPIScaleEnabled";
@@ -50,19 +47,25 @@ static const std::string config_margin_bottom_key = "MarginBottom";
 
 static const std::string config_key_size_key = "KeySize";
 static const std::string config_key_border_thickness_key = "KeyBorderThickness";
+static const std::string config_key_char_size_key = "KeyCharacterSize";
 static const std::string config_key_spacing_key = "KeySpacing";
+
+static const std::string config_show_counter_key = "ShowCounter";
+static const std::string config_counter_char_size_key = "CounterCharacterSize";
+static const std::string config_counter_position_offset_key = "CounterPositionOffset";
+static const std::string config_counter_color_key = "CounterColor";
 
 static const std::string config_bar_velocity_key = "BarVelocityPerSecond";
 
 static const std::string config_bg_color_key = "BackgroundColor";
 
 static const std::string config_keys_key = "Keys";
-static const std::string config_key_key_prefix = "Key_";
+static const std::string config_key_key_prefix = "Key";
 
 static const std::string config_key_width_multiplier_key = "WidthMultiplier";
 static const std::string config_key_scancode_key = "Scancode";
 static const std::string config_key_key_name_key = "KeyName";
-static const std::string config_key_color_key = "KeyName";
+static const std::string config_key_color_key = "KeyColor";
 
 struct KeyConfig
 {
@@ -105,11 +108,6 @@ struct Config
 
     std::string font_name;
 
-    unsigned int key_char_size;
-    static constexpr unsigned int key_char_size_default = 32U;
-    unsigned int counter_char_size;
-    static constexpr unsigned int counter_char_size_default = 24U;
-
     int window_height;
     static constexpr int window_height_default = 640;
 
@@ -118,19 +116,29 @@ struct Config
     int margin_right;
     static constexpr int margin_right_default = 32;
     int margin_bottom;
-    static constexpr int margin_bottom_default = 32;
+    static constexpr int margin_bottom_default = 48;
+
+    sf::Color bg_color;
 
     int key_size;
     static constexpr int key_size_default = 64;
     int key_border_thickness;
     static constexpr int key_border_thickness_default = 4;
+    unsigned int key_char_size;
+    static constexpr unsigned int key_char_size_default = 32U;
     int key_spacing;
     static constexpr int key_spacing_default = 16;
 
+    bool show_counter;
+    static constexpr bool show_counter_default = true;
+    unsigned int counter_char_size;
+    static constexpr unsigned int counter_char_size_default = 24U;
+    int counter_position_offset;
+    static constexpr int counter_position_offset_default = 24;
+    sf::Color counter_color;
+
     int bar_velocity;
     static constexpr int bar_velocity_default = (window_height_default - margin_bottom_default - key_size_default) * 1.5;
-
-    sf::Color bg_color;
 
     std::vector<KeyConfig> key_configs;
 
@@ -140,9 +148,6 @@ struct Config
 
     float scale_final;
 
-    unsigned int key_char_size_scaled;
-    unsigned int counter_char_size_scaled;
-
     float window_height_scaled;
 
     float margin_left_scaled;
@@ -150,8 +155,12 @@ struct Config
     float margin_bottom_scaled;
 
     float key_size_scaled;
+    unsigned int key_char_size_scaled;
     float key_border_thickness_scaled;
     float key_spacing_scaled;
+
+    unsigned int counter_char_size_scaled;
+    float counter_position_offset_scaled;
 
     float bar_velocity_scaled;
 
@@ -167,9 +176,6 @@ struct Config
     {
         CalculateScale();
 
-        key_char_size_scaled = key_char_size * scale_final;
-        counter_char_size_scaled = counter_char_size * scale_final;
-
         window_height_scaled = window_height * scale_final;
 
         margin_left_scaled = margin_left * scale_final;
@@ -177,26 +183,58 @@ struct Config
         margin_bottom_scaled = margin_bottom * scale_final;
 
         key_size_scaled = key_size * scale_final;
+        key_char_size_scaled = key_char_size * scale_final;
         key_border_thickness_scaled = key_border_thickness * scale_final;
         key_spacing_scaled = key_spacing * scale_final;
+
+        counter_char_size_scaled = counter_char_size * scale_final;
+        counter_position_offset_scaled = counter_position_offset * scale_final;
 
         bar_velocity_scaled = bar_velocity * scale_final;
     }
 };
 static const std::string config_font_name_default = "MiSans-Regular.ttf";
-static const sf::Color config_bg_color_default = sf::Color(0x000000FF);
+static const sf::Color config_counter_color_default = sf::Color::White;
+static const sf::Color config_bg_color_default = sf::Color::Black;
 
-template<typename T> T LoadOrSetDefaultConfigNode(YAML::Node &node, const std::string &key, const T &default_value, bool *node_inexist = nullptr)
+template<typename T> T LoadOrSetDefaultConfigNode(YAML::Node &node, const std::string &key, const T &default_value, bool *node_inexist_or_valid = nullptr)
 {
     if (!node[key])
     {
-        if (node_inexist != nullptr)
-            *node_inexist = true;
+        if (node_inexist_or_valid != nullptr)
+            *node_inexist_or_valid = true;
             
         node[key] = default_value;
+
         return default_value;
     }
-    return node[key].as<T>();
+    
+    T result;
+    try
+    {
+        result = node[key].as<T>();
+    }
+    catch (const std::exception &exception)
+    {
+        std::cerr << "Failed to read value from \"" << key << "\": " << exception.what() << '\n';
+        *node_inexist_or_valid = true;
+
+        node[key] = default_value;
+
+        return default_value;
+    }
+
+    return result;
+}
+
+static sf::Color LoadOrSetDefaultColorConfigNode(YAML::Node &node, const std::string &key, const sf::Color &default_color, bool *node_inexist_or_valid = nullptr)
+{
+    YAML::Node color_node = node[key];
+    std::uint8_t r = LoadOrSetDefaultConfigNode<int>(color_node, "R", default_color.r, node_inexist_or_valid);
+    std::uint8_t g = LoadOrSetDefaultConfigNode<int>(color_node, "G", default_color.g, node_inexist_or_valid);
+    std::uint8_t b = LoadOrSetDefaultConfigNode<int>(color_node, "B", default_color.b, node_inexist_or_valid);
+    std::uint8_t a = LoadOrSetDefaultConfigNode<int>(color_node, "A", default_color.a, node_inexist_or_valid);
+    return sf::Color(r, g, b, a);
 }
 
 static void LoadOrBuildConfig(const std::string &config_file_name, Config &config)
@@ -219,28 +257,25 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
 
     config.font_name = LoadOrSetDefaultConfigNode(config_root, config_font_name_key, config_font_name_default, &config_write_needed);
 
-    config.key_char_size = LoadOrSetDefaultConfigNode(config_root, config_key_char_size_key, Config::key_char_size_default, &config_write_needed);
-    config.counter_char_size = LoadOrSetDefaultConfigNode(config_root, config_counter_char_size_key, Config::counter_char_size_default, &config_write_needed);
-
     config.window_height = LoadOrSetDefaultConfigNode(config_root, config_window_height_key, Config::window_height_default, &config_write_needed);
     
     config.margin_left = LoadOrSetDefaultConfigNode(config_root, config_margin_left_key, Config::margin_left_default, &config_write_needed);
     config.margin_right = LoadOrSetDefaultConfigNode(config_root, config_margin_right_key, Config::margin_right_default, &config_write_needed);
     config.margin_bottom = LoadOrSetDefaultConfigNode(config_root, config_margin_bottom_key, Config::margin_bottom_default, &config_write_needed);
 
+    config.bg_color = LoadOrSetDefaultColorConfigNode(config_root, config_bg_color_key, config_bg_color_default, &config_write_needed);
+
     config.key_size = LoadOrSetDefaultConfigNode(config_root, config_key_size_key, Config::key_size_default, &config_write_needed);
     config.key_border_thickness = LoadOrSetDefaultConfigNode(config_root, config_key_border_thickness_key, Config::key_border_thickness_default, &config_write_needed);
+    config.key_char_size = LoadOrSetDefaultConfigNode(config_root, config_key_char_size_key, Config::key_char_size_default, &config_write_needed);
     config.key_spacing = LoadOrSetDefaultConfigNode(config_root, config_key_spacing_key, Config::key_spacing_default, &config_write_needed);
 
-    config.bar_velocity = LoadOrSetDefaultConfigNode(config_root, config_bar_velocity_key, Config::bar_velocity_default, &config_write_needed);
+    config.show_counter = LoadOrSetDefaultConfigNode(config_root, config_show_counter_key, Config::show_counter_default, &config_write_needed);
+    config.counter_char_size = LoadOrSetDefaultConfigNode(config_root, config_counter_char_size_key, Config::counter_char_size_default, &config_write_needed);
+    config.counter_position_offset = LoadOrSetDefaultConfigNode(config_root, config_counter_position_offset_key, Config::counter_position_offset_default, &config_write_needed);
+    config.counter_color = LoadOrSetDefaultColorConfigNode(config_root, config_counter_color_key, config_counter_color_default, &config_write_needed);
 
-    YAML::Node bg_color_node = config_root[config_bg_color_key];
-    config.bg_color = sf::Color(
-        LoadOrSetDefaultConfigNode<int>(bg_color_node, "R", config_bg_color_default.r, &config_write_needed),
-        LoadOrSetDefaultConfigNode<int>(bg_color_node, "G", config_bg_color_default.g, &config_write_needed),
-        LoadOrSetDefaultConfigNode<int>(bg_color_node, "B", config_bg_color_default.b, &config_write_needed),
-        LoadOrSetDefaultConfigNode<int>(bg_color_node, "A", config_bg_color_default.a, &config_write_needed)
-    );
+    config.bar_velocity = LoadOrSetDefaultConfigNode(config_root, config_bar_velocity_key, Config::bar_velocity_default, &config_write_needed);
 
     config.CalculateDPIScaledValues();
 
@@ -282,12 +317,12 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
             // key name
             sf::String key_name = LoadOrSetDefaultConfigNode<std::string>(key_node, config_key_key_name_key, config_key_key_name_default, &config_write_needed);
 
-            sf::Color color(
-                LoadOrSetDefaultConfigNode<int>(key_node, "R", 255, &config_write_needed),
-                LoadOrSetDefaultConfigNode<int>(key_node, "G", 255, &config_write_needed),
-                LoadOrSetDefaultConfigNode<int>(key_node, "B", 255, &config_write_needed),
-                LoadOrSetDefaultConfigNode<int>(key_node, "A", 255, &config_write_needed)
-            );
+            YAML::Node key_color_node = key_node[config_key_color_key];
+            std::uint8_t key_r = LoadOrSetDefaultConfigNode<int>(key_color_node, "R", 255, &config_write_needed);
+            std::uint8_t key_g = LoadOrSetDefaultConfigNode<int>(key_color_node, "G", 255, &config_write_needed);
+            std::uint8_t key_b = LoadOrSetDefaultConfigNode<int>(key_color_node, "B", 255, &config_write_needed);
+            std::uint8_t key_a = LoadOrSetDefaultConfigNode<int>(key_color_node, "A", 255, &config_write_needed);
+            sf::Color color(key_r, key_g, key_b, key_a);
 
             KeyConfig key_config = KeyConfig(width_multiplier, scancode, key_name, color);
             config.key_configs.push_back(key_config);
@@ -317,10 +352,11 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
             key_node[config_key_scancode_key] = std::string(magic_enum::enum_name(default_key_config.scancode));
             key_node[config_key_key_name_key] = (std::string)default_key_config.key_name;
 
-            key_node["R"] = (int)default_key_config.color.r;
-            key_node["G"] = (int)default_key_config.color.g;
-            key_node["B"] = (int)default_key_config.color.b;
-            key_node["A"] = (int)default_key_config.color.a;
+            YAML::Node key_color_node = key_node[config_key_color_key];
+            key_color_node["R"] = (int)default_key_config.color.r;
+            key_color_node["G"] = (int)default_key_config.color.g;
+            key_color_node["B"] = (int)default_key_config.color.b;
+            key_color_node["A"] = (int)default_key_config.color.a;
 
             key_num++;
 
@@ -513,7 +549,13 @@ protected:
 
     RectangleHollowFilled key_rect;
 
-    sf::Text text;
+    sf::Text key_text;
+    sf::Text counter_text;
+
+    bool show_counter;
+    float counter_position_offset;
+
+    int press_count = 0;
 
 public:
     sf::Keyboard::Scancode scancode;
@@ -527,8 +569,12 @@ public:
         const sf::Keyboard::Scancode scancode,
         const sf::String &key_name,
         const sf::Font &font,
-        const unsigned int char_size,
-        const sf::Color color
+        const unsigned int key_char_size,
+        const unsigned int counter_char_size,
+        const bool show_counter,
+        const float counter_position_offset,
+        const sf::Color key_color,
+        const sf::Color counter_color
     ) :
         pos(pos),
         size({ size * width_multiplier, size }),
@@ -537,16 +583,68 @@ public:
         scancode(scancode),
         key_name(key_name),
         font(font),
-        color(color),
-        key_rect(pos, this->size, border_thickness, color),
-        text(this->font, key_name, char_size)
+        color(key_color),
+        key_rect(pos, this->size, border_thickness, key_color),
+        key_text(font, key_name, key_char_size),
+        counter_text(font, "", counter_char_size),
+        show_counter(show_counter),
+        counter_position_offset(counter_position_offset)
     {
-        color_transparent = color;
+        color_transparent = key_color;
         color_transparent.a /= 2;
 
-        CenterText(text);
-        text.setPosition(pos + (this->size / 2.0F));
-        text.setFillColor(color);
+        CenterText(key_text);
+        key_text.setPosition(pos + (this->size / 2.0F));
+        key_text.setFillColor(key_color);
+
+        counter_text.setPosition(
+            {
+                pos.x + (this->size.x / 2.0F),
+                pos.y + this->size.y + counter_position_offset
+            }
+        );
+        counter_text.setFillColor(counter_color);
+    }
+
+    void Press(void)
+    {
+        key_rect.fill_visable = true;
+
+        if (!key_down)
+        {
+            key_bars.push_back(KeyBar(pos, size.x, bar_velocity, color_transparent));
+
+            press_count++;
+        }
+
+        key_down = true;
+    }
+
+    void Release(void)
+    {
+        key_rect.fill_visable = false;
+
+        if (key_down)
+        {
+            if (key_bars.size() > 0)
+                key_bars.back().Release();
+        }
+
+        key_down = false;
+    }
+
+    void UpdateCounter(void)
+    {
+        counter_text.setString(std::to_string(press_count));
+
+        // sf::FloatRect counter_text_bounds = counter_text.getLocalBounds();
+        // counter_text.setOrigin(
+        //     {
+        //         counter_text_bounds.position.x + (counter_text_bounds.size.x / 2.0F),
+        //         counter_text_bounds.position.y
+        //     }
+        // );
+        CenterText(counter_text);
     }
 
     void UpdateBars(const float delta_time)
@@ -592,6 +690,8 @@ public:
         key_down_prev = key_down_curr;
 #endif
 
+        UpdateCounter();
+
         UpdateBars(delta_time);
     }
 
@@ -602,30 +702,10 @@ public:
 
         key_rect.Draw(target);
 
-        target.draw(text);
-    }
+        target.draw(key_text);
 
-    void Press(void)
-    {
-        key_rect.fill_visable = true;
-
-        if (!key_down)
-            key_bars.push_back(KeyBar(pos, size.x, bar_velocity, color_transparent));
-
-        key_down = true;
-    }
-
-    void Release(void)
-    {
-        key_rect.fill_visable = false;
-
-        if (key_down)
-        {
-            if (key_bars.size() > 0)
-                key_bars.back().Release();
-        }
-
-        key_down = false;
+        if (show_counter)
+            target.draw(counter_text);
     }
 };
 
@@ -769,15 +849,20 @@ int main(int arg_count, char *arg_list[])
     {
         keys.push_back(
             KeyWithBar(
-                { window_width_final, key_pos_y },
-                config.key_size_scaled, key_config.width_multiplier,
-                config.key_border_thickness_scaled,
-                config.bar_velocity_scaled,
-                key_config.scancode,
-                key_config.key_name,
-                font,
-                config.key_char_size_scaled,
-                key_config.color
+                { window_width_final, key_pos_y },      // pos
+                config.key_size_scaled,                 // size
+                key_config.width_multiplier,            // width_multiplier
+                config.key_border_thickness_scaled,     // border_thickness
+                config.bar_velocity_scaled,             // bar_velocity
+                key_config.scancode,                    // scancode
+                key_config.key_name,                    // key_name
+                font,                                   // font
+                config.key_char_size_scaled,            // key_char_size
+                config.counter_char_size_scaled,        // counter_char_size
+                config.show_counter,                    // show_counter
+                config.counter_position_offset_scaled,  // counter_position_offset
+                key_config.color,                       // key_color
+                config.counter_color                    // counter_color
             )
         );
 
