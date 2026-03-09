@@ -53,6 +53,7 @@ static const std::string config_key_spacing_key = "KeySpacing";
 static const std::string config_show_counter_key = "ShowCounter";
 
 static const std::string config_show_key_bpm_key = "ShowKeyBPM1/2";
+static const std::string config_key_bpm_smooth_count_key = "KeyBPMSmoothCount";
 
 static const std::string config_key_info_char_size_key = "KeyInfoCharacterSize";
 static const std::string config_key_info_position_offset_key = "KeyInfoPositionOffset";
@@ -137,6 +138,8 @@ struct Config
 
     bool show_key_bpm;
     static constexpr bool show_key_bpm_default = true;
+    int key_bpm_smooth_count;
+    static constexpr int key_bpm_smooth_count_default = 1;
 
     unsigned int key_info_char_size;
     static constexpr unsigned int key_info_char_size_default = 18U;
@@ -280,6 +283,7 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
     config.show_counter = LoadOrSetDefaultConfigNode(config_root, config_show_counter_key, Config::show_counter_default, &config_write_needed);
 
     config.show_key_bpm = LoadOrSetDefaultConfigNode(config_root, config_show_key_bpm_key, Config::show_key_bpm_default, &config_write_needed);
+    config.key_bpm_smooth_count = LoadOrSetDefaultConfigNode(config_root, config_key_bpm_smooth_count_key, Config::key_bpm_smooth_count_default, &config_write_needed);
 
     config.key_info_char_size = LoadOrSetDefaultConfigNode(config_root, config_key_info_char_size_key, Config::key_info_char_size_default, &config_write_needed);
     config.key_info_position_offset = LoadOrSetDefaultConfigNode(config_root, config_key_info_position_offset_key, Config::key_info_position_offset_default, &config_write_needed);
@@ -570,7 +574,8 @@ protected:
 
     int press_count = 0;
 
-    std::chrono::_V2::system_clock::time_point time_point_of_last_key_press;
+    int max_key_press_time_count;
+    std::vector<std::chrono::_V2::system_clock::time_point> time_point_of_key_presses;
     float key_press_bpm = 0.0F;
 
 public:
@@ -589,6 +594,7 @@ public:
         const unsigned int key_info_char_size,
         const bool show_counter,
         const bool show_key_bpm,
+        const int key_bpm_smooth_count,
         const float key_info_position_offset,
         const sf::Color key_color,
         const sf::Color key_info_color
@@ -605,8 +611,8 @@ public:
         key_text(font, key_name, key_char_size),
         show_counter(show_counter),
         show_key_bpm(show_key_bpm),
-        key_info_position_offset(key_info_position_offset),
-        time_point_of_last_key_press(std::chrono::high_resolution_clock::now())
+        max_key_press_time_count(key_bpm_smooth_count + 1),
+        key_info_position_offset(key_info_position_offset)
     {
         // transparent color (for pressed effect)
 
@@ -618,6 +624,10 @@ public:
         CenterText(key_text);
         key_text.setPosition(pos + (this->size / 2.0F));
         key_text.setFillColor(key_color);
+
+        // key press bpm
+
+        time_point_of_key_presses.push_back(std::chrono::high_resolution_clock::now());
 
         // key info
 
@@ -661,12 +671,33 @@ public:
     {
         auto time_point_of_this_key_press = std::chrono::high_resolution_clock::now();
 
-        float time_secs_between_this_and_last_key_press =
-            std::chrono::duration_cast<std::chrono::duration<float>>(time_point_of_this_key_press - time_point_of_last_key_press).count();
+        if (time_point_of_key_presses.size() >= max_key_press_time_count)
+            time_point_of_key_presses.erase(time_point_of_key_presses.begin());
 
-        time_point_of_last_key_press = time_point_of_this_key_press;
+        time_point_of_key_presses.push_back(time_point_of_this_key_press);
 
-        key_press_bpm = 60.0F / (time_secs_between_this_and_last_key_press * 2.0F);
+        int bpm_count = 0;
+        float bpm_sum = 0.0F;
+
+        for (int i = 1; i < time_point_of_key_presses.size(); i++)
+        {
+            auto &time_point_of_last_key_press = time_point_of_key_presses[i - 1];
+            auto &time_point_of_this_key_press = time_point_of_key_presses[i];
+
+            float time_secs_between_this_and_last_key_press =
+                std::chrono::duration_cast<std::chrono::duration<float>>(time_point_of_this_key_press - time_point_of_last_key_press).count();
+
+            float bpm_between_this_and_last_key_press = 60.0F / (time_secs_between_this_and_last_key_press * 2.0F);
+
+            bpm_sum += bpm_between_this_and_last_key_press;
+
+            bpm_count++;
+        }
+
+        if (bpm_count > 0)
+            key_press_bpm = bpm_sum / bpm_count;
+        else
+            key_press_bpm = 0.0F;
     }
 
     void Press(void)
@@ -943,6 +974,7 @@ int main(int arg_count, char *arg_list[])
                 config.key_info_char_size_scaled,       // key_info_char_size
                 config.show_counter,                    // show_counter
                 config.show_key_bpm,                    // show_key_bpm
+                config.key_bpm_smooth_count,            // key_bpm_smooth_count
                 config.key_info_position_offset_scaled, // key_info_position_offset
                 key_config.color,                       // key_color
                 config.key_info_color                   // key_info_color
