@@ -25,7 +25,7 @@
 
 #if 1 || REGION_CONFIGURATION
 
-static const sf::String window_title = "Key Overlay qwq";
+static const sf::String window_title = "Key Overlay";
 
 static const std::string default_config_file_name = "config.yaml";
 
@@ -51,9 +51,12 @@ static const std::string config_key_char_size_key = "KeyCharacterSize";
 static const std::string config_key_spacing_key = "KeySpacing";
 
 static const std::string config_show_counter_key = "ShowCounter";
-static const std::string config_counter_char_size_key = "CounterCharacterSize";
-static const std::string config_counter_position_offset_key = "CounterPositionOffset";
-static const std::string config_counter_color_key = "CounterColor";
+
+static const std::string config_show_key_bpm_key = "ShowKeyBPM1/2";
+
+static const std::string config_key_info_char_size_key = "KeyInfoCharacterSize";
+static const std::string config_key_info_position_offset_key = "KeyInfoPositionOffset";
+static const std::string config_key_info_color_key = "KeyInfoColor";
 
 static const std::string config_bar_velocity_key = "BarVelocityPerSecond";
 
@@ -116,7 +119,7 @@ struct Config
     int margin_right;
     static constexpr int margin_right_default = 32;
     int margin_bottom;
-    static constexpr int margin_bottom_default = 48;
+    static constexpr int margin_bottom_default = 64;
 
     sf::Color bg_color;
 
@@ -131,11 +134,15 @@ struct Config
 
     bool show_counter;
     static constexpr bool show_counter_default = true;
-    unsigned int counter_char_size;
-    static constexpr unsigned int counter_char_size_default = 24U;
-    int counter_position_offset;
-    static constexpr int counter_position_offset_default = 24;
-    sf::Color counter_color;
+
+    bool show_key_bpm;
+    static constexpr bool show_key_bpm_default = true;
+
+    unsigned int key_info_char_size;
+    static constexpr unsigned int key_info_char_size_default = 18U;
+    int key_info_position_offset;
+    static constexpr int key_info_position_offset_default = 32;
+    sf::Color key_info_color;
 
     int bar_velocity;
     static constexpr int bar_velocity_default = (window_height_default - margin_bottom_default - key_size_default) * 1.5;
@@ -159,8 +166,8 @@ struct Config
     float key_border_thickness_scaled;
     float key_spacing_scaled;
 
-    unsigned int counter_char_size_scaled;
-    float counter_position_offset_scaled;
+    unsigned int key_info_char_size_scaled;
+    float key_info_position_offset_scaled;
 
     float bar_velocity_scaled;
 
@@ -187,14 +194,14 @@ struct Config
         key_border_thickness_scaled = key_border_thickness * scale_final;
         key_spacing_scaled = key_spacing * scale_final;
 
-        counter_char_size_scaled = counter_char_size * scale_final;
-        counter_position_offset_scaled = counter_position_offset * scale_final;
+        key_info_char_size_scaled = key_info_char_size * scale_final;
+        key_info_position_offset_scaled = key_info_position_offset * scale_final;
 
         bar_velocity_scaled = bar_velocity * scale_final;
     }
 };
 static const std::string config_font_name_default = "MiSans-Regular.ttf";
-static const sf::Color config_counter_color_default = sf::Color::White;
+static const sf::Color config_key_info_color_default = sf::Color::White;
 static const sf::Color config_bg_color_default = sf::Color::Black;
 
 template<typename T> T LoadOrSetDefaultConfigNode(YAML::Node &node, const std::string &key, const T &default_value, bool *node_inexist_or_valid = nullptr)
@@ -271,9 +278,12 @@ static void LoadOrBuildConfig(const std::string &config_file_name, Config &confi
     config.key_spacing = LoadOrSetDefaultConfigNode(config_root, config_key_spacing_key, Config::key_spacing_default, &config_write_needed);
 
     config.show_counter = LoadOrSetDefaultConfigNode(config_root, config_show_counter_key, Config::show_counter_default, &config_write_needed);
-    config.counter_char_size = LoadOrSetDefaultConfigNode(config_root, config_counter_char_size_key, Config::counter_char_size_default, &config_write_needed);
-    config.counter_position_offset = LoadOrSetDefaultConfigNode(config_root, config_counter_position_offset_key, Config::counter_position_offset_default, &config_write_needed);
-    config.counter_color = LoadOrSetDefaultColorConfigNode(config_root, config_counter_color_key, config_counter_color_default, &config_write_needed);
+
+    config.show_key_bpm = LoadOrSetDefaultConfigNode(config_root, config_show_key_bpm_key, Config::show_key_bpm_default, &config_write_needed);
+
+    config.key_info_char_size = LoadOrSetDefaultConfigNode(config_root, config_key_info_char_size_key, Config::key_info_char_size_default, &config_write_needed);
+    config.key_info_position_offset = LoadOrSetDefaultConfigNode(config_root, config_key_info_position_offset_key, Config::key_info_position_offset_default, &config_write_needed);
+    config.key_info_color = LoadOrSetDefaultColorConfigNode(config_root, config_key_info_color_key, config_key_info_color_default, &config_write_needed);
 
     config.bar_velocity = LoadOrSetDefaultConfigNode(config_root, config_bar_velocity_key, Config::bar_velocity_default, &config_write_needed);
 
@@ -550,12 +560,18 @@ protected:
     RectangleHollowFilled key_rect;
 
     sf::Text key_text;
-    sf::Text counter_text;
+    std::vector<sf::Text> key_info_texts;
+
+    std::string key_info_string;
 
     bool show_counter;
-    float counter_position_offset;
+    bool show_key_bpm;
+    float key_info_position_offset;
 
     int press_count = 0;
+
+    std::chrono::_V2::system_clock::time_point time_point_of_last_key_press;
+    float key_press_bpm = 0.0F;
 
 public:
     sf::Keyboard::Scancode scancode;
@@ -570,11 +586,12 @@ public:
         const sf::String &key_name,
         const sf::Font &font,
         const unsigned int key_char_size,
-        const unsigned int counter_char_size,
+        const unsigned int key_info_char_size,
         const bool show_counter,
-        const float counter_position_offset,
+        const bool show_key_bpm,
+        const float key_info_position_offset,
         const sf::Color key_color,
-        const sf::Color counter_color
+        const sf::Color key_info_color
     ) :
         pos(pos),
         size({ size * width_multiplier, size }),
@@ -586,24 +603,70 @@ public:
         color(key_color),
         key_rect(pos, this->size, border_thickness, key_color),
         key_text(font, key_name, key_char_size),
-        counter_text(font, "", counter_char_size),
         show_counter(show_counter),
-        counter_position_offset(counter_position_offset)
+        show_key_bpm(show_key_bpm),
+        key_info_position_offset(key_info_position_offset),
+        time_point_of_last_key_press(std::chrono::high_resolution_clock::now())
     {
+        // transparent color (for pressed effect)
+
         color_transparent = key_color;
         color_transparent.a /= 2;
+
+        // key name
 
         CenterText(key_text);
         key_text.setPosition(pos + (this->size / 2.0F));
         key_text.setFillColor(key_color);
 
-        counter_text.setPosition(
-            {
-                pos.x + (this->size.x / 2.0F),
-                pos.y + this->size.y + counter_position_offset
-            }
-        );
-        counter_text.setFillColor(counter_color);
+        // key info
+
+        int line_count = 0;
+
+        if (show_counter)
+            line_count++;
+
+        if (show_key_bpm)
+            line_count++;
+
+        InitKeyInfoText(font, key_info_char_size, key_info_color, line_count);
+    }
+
+    void InitKeyInfoText(const sf::Font &font, const unsigned int key_info_char_size, const sf::Color key_info_color, const int lines)
+    {
+        float line_spacing = key_info_char_size * 1.1F;
+
+        float key_info_height = line_spacing * lines;
+
+        sf::Vector2f text_pos =
+        {
+            pos.x + (size.x / 2.0F),
+            pos.y + size.y + key_info_position_offset - (key_info_height / 2.0F)
+        };
+
+        for (int i = 0; i < lines; i++)
+        {
+            key_info_texts.push_back(sf::Text(font, "", key_info_char_size));
+
+            auto &key_info_this_line = key_info_texts[i];
+
+            key_info_this_line.setPosition(text_pos);
+            key_info_this_line.setFillColor(key_info_color);
+
+            text_pos.y += line_spacing;
+        }
+    }
+
+    void UpdateKeyPressBPM(void)
+    {
+        auto time_point_of_this_key_press = std::chrono::high_resolution_clock::now();
+
+        float time_secs_between_this_and_last_key_press =
+            std::chrono::duration_cast<std::chrono::duration<float>>(time_point_of_this_key_press - time_point_of_last_key_press).count();
+
+        time_point_of_last_key_press = time_point_of_this_key_press;
+
+        key_press_bpm = 60.0F / (time_secs_between_this_and_last_key_press * 2.0F);
     }
 
     void Press(void)
@@ -612,6 +675,8 @@ public:
 
         if (!key_down)
         {
+            UpdateKeyPressBPM();
+
             key_bars.push_back(KeyBar(pos, size.x, bar_velocity, color_transparent));
 
             press_count++;
@@ -633,18 +698,35 @@ public:
         key_down = false;
     }
 
-    void UpdateCounter(void)
+    void UpdateKeyInfo(void)
     {
-        counter_text.setString(std::to_string(press_count));
+        int index = 0;
 
-        // sf::FloatRect counter_text_bounds = counter_text.getLocalBounds();
-        // counter_text.setOrigin(
-        //     {
-        //         counter_text_bounds.position.x + (counter_text_bounds.size.x / 2.0F),
-        //         counter_text_bounds.position.y
-        //     }
-        // );
-        CenterText(counter_text);
+        if (show_counter)
+        {
+            auto &counter_text = key_info_texts[index];
+
+            key_info_string.clear();
+            key_info_string = key_info_string.append(std::to_string(press_count));
+            counter_text.setString(key_info_string);
+
+            CenterText(counter_text);
+
+            index++;
+        }
+        
+        if (show_key_bpm)
+        {
+            auto &key_bpm_text = key_info_texts[index];
+
+            key_info_string.clear();
+            key_info_string = key_info_string.append(std::to_string((int)std::round(key_press_bpm))).append(" BPM");
+            key_bpm_text.setString(key_info_string);
+
+            CenterText(key_bpm_text);
+
+            index++;
+        }
     }
 
     void UpdateBars(const float delta_time)
@@ -690,7 +772,7 @@ public:
         key_down_prev = key_down_curr;
 #endif
 
-        UpdateCounter();
+        UpdateKeyInfo();
 
         UpdateBars(delta_time);
     }
@@ -704,8 +786,8 @@ public:
 
         target.draw(key_text);
 
-        if (show_counter)
-            target.draw(counter_text);
+        for (const auto &text : key_info_texts)
+            target.draw(text);
     }
 };
 
@@ -858,11 +940,12 @@ int main(int arg_count, char *arg_list[])
                 key_config.key_name,                    // key_name
                 font,                                   // font
                 config.key_char_size_scaled,            // key_char_size
-                config.counter_char_size_scaled,        // counter_char_size
+                config.key_info_char_size_scaled,       // key_info_char_size
                 config.show_counter,                    // show_counter
-                config.counter_position_offset_scaled,  // counter_position_offset
+                config.show_key_bpm,                    // show_key_bpm
+                config.key_info_position_offset_scaled, // key_info_position_offset
                 key_config.color,                       // key_color
-                config.counter_color                    // counter_color
+                config.key_info_color                   // key_info_color
             )
         );
 
