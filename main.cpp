@@ -651,7 +651,7 @@ public:
         sf::Vector2f text_pos =
         {
             pos.x + (size.x / 2.0F),
-            pos.y + size.y + key_info_position_offset - (key_info_height / 2.0F)
+            pos.y + size.y + key_info_position_offset - (key_info_height / 2.0F) + (line_spacing / 2.0F)
         };
 
         for (int i = 0; i < lines; i++)
